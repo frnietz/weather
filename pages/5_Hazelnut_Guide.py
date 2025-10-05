@@ -63,8 +63,8 @@ with st.sidebar:
     start_date = st.date_input("Start", value=today - timedelta(days=365))
     end_date = st.date_input("End", value=today, min_value=start_date, max_value=today)
     if end_date > today:
-    st.warning("End date trimmed to today (archive has no future data).")
-    end_date = today
+        st.warning("End date trimmed to today (archive has no future data).")
+        end_date = today
 if start_date > end_date:
     st.warning("Start date was after end date — aligning to end date.")
     start_date = end_date
