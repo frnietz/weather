@@ -193,7 +193,7 @@ def monthly_from_daily(daily_df: pd.DataFrame) -> pd.DataFrame:
     df.index = pd.to_datetime(df.index)
     df["month"] = df.index.to_period("M").astype(str)
 
-    # Basic series (handle missing columns gracefully)
+    # Extract base series (handle missing gracefully)
     tmin = df.get("t_min_api", df.get("temperature_2m_min"))
     tmax = df.get("t_max_api", df.get("temperature_2m_max"))
     rh   = df.get("rh_mean")
@@ -202,25 +202,51 @@ def monthly_from_daily(daily_df: pd.DataFrame) -> pd.DataFrame:
     wc   = df.get("weathercode")
     sunny = df.get("sunny")
     if sunny is None and wc is not None:
-        sunny = wc.isin([0,1])
+        sunny = wc.isin([0, 1])
 
+    # Begin aggregation frame
     agg = pd.DataFrame(index=sorted(df["month"].unique()))
-    if tmin is not None: agg["tmin_mean"] = df.groupby("month")[tmin.name].mean()
-    if tmax is not None: agg["tmax_mean"] = df.groupby("month")[tmax.name].mean()
-    if rh is not None:   agg["rh_mean"]   = df.groupby("month")[rh.name].mean()
-    if dpt is not None:  agg["dew_mean"]  = df.groupby("month")[dpt.name].mean()
-    if pr is not None:
-        agg["precip_total"] = df.groupby("month")[pr.name].sum()
-        agg["rainy_days"]   = df.groupby("month")[(pr > 1.0)].sum()
-        agg["dry_days"]     = df.groupby("month")[(pr < 1.0)].sum()
-    if sunny is not None:
-        agg["sunny_days"] = df.groupby("month")[sunny.name].sum()
-    if tmax is not None:
-        agg["heat_days_32C"] = df.groupby("month")[(tmax >= 32.0)].sum()
-        agg["heat_days_35C"] = df.groupby("month")[(tmax >= 35.0)].sum()
+
+    # Means
     if tmin is not None:
-        agg["frost_days_0C"] = df.groupby("month")[(tmin <= 0.0)].sum()
-        agg["frost_days_-2C"] = df.groupby("month")[(tmin <= -2.0)].sum()
+        df["_tmin"] = tmin
+        agg["tmin_mean"] = df.groupby("month")["_tmin"].mean()
+    if tmax is not None:
+        df["_tmax"] = tmax
+        agg["tmax_mean"] = df.groupby("month")["_tmax"].mean()
+    if rh is not None:
+        df["_rh"] = rh
+        agg["rh_mean"] = df.groupby("month")["_rh"].mean()
+    if dpt is not None:
+        df["_dew"] = dpt
+        agg["dew_mean"] = df.groupby("month")["_dew"].mean()
+
+    # Precip + day counts (avoid GroupBy with boolean index)
+    if pr is not None:
+        df["_pr"] = pr.fillna(0.0)
+        agg["precip_total"] = df.groupby("month")["_pr"].sum()
+        df["_rain_flag"] = (df["_pr"] > 1.0).astype(int)
+        df["_dry_flag"]  = (df["_pr"] < 1.0).astype(int)
+        agg["rainy_days"] = df.groupby("month")["_rain_flag"].sum()
+        agg["dry_days"]   = df.groupby("month")["_dry_flag"].sum()
+
+    # Sunny days
+    if sunny is not None:
+        df["_sunny_flag"] = sunny.astype(int)
+        agg["sunny_days"] = df.groupby("month")["_sunny_flag"].sum()
+
+    # Heat/frost day counts
+    if tmax is not None:
+        df["_heat32"] = (df["_tmax"] >= 32.0).astype(int)
+        df["_heat35"] = (df["_tmax"] >= 35.0).astype(int)
+        agg["heat_days_32C"] = df.groupby("month")["_heat32"].sum()
+        agg["heat_days_35C"] = df.groupby("month")["_heat35"].sum()
+    if tmin is not None:
+        df["_frost0"]  = (df["_tmin"] <= 0.0).astype(int)
+        df["_frostm2"] = (df["_tmin"] <= -2.0).astype(int)
+        agg["frost_days_0C"]  = df.groupby("month")["_frost0"].sum()
+        agg["frost_days_-2C"] = df.groupby("month")["_frostm2"].sum()
+
     return agg
 
 def drought_proxy_flags(monthly_df: pd.DataFrame) -> pd.Series:
