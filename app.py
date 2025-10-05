@@ -104,6 +104,7 @@ def summarize_daily_from_hourly(h: pd.DataFrame) -> pd.DataFrame:
     return daily
 
 def nice_number(n):
+    import numpy as np, pandas as pd
     return None if n is None or pd.isna(n) else float(np.round(n, 2))
 
 WMO_CODES = {
@@ -148,7 +149,13 @@ st.title("🌤️ Letta Agritech — Historical & 5-Day Weather Dashboard")
 
 with st.sidebar:
     st.header("Location")
-    mode = st.radio("Select by:", ["Place name", "Latitude/Longitude"], horizontal=True)
+    mode = st.radio("Select by:", ["Place name", "Latitude/Longitude", "Pick on Map"])
+    tz_str = "auto"
+
+    # Defaults
+    default_lat, default_lon = 40.916, 38.387  # Giresun-ish
+    st.session_state.setdefault("picked_latlon", [default_lat, default_lon])
+
     if mode == "Place name":
         q = st.text_input("City/Town/Region name", value="Giresun")
         results = geocode_place(q) if q else []
@@ -157,14 +164,16 @@ with st.sidebar:
             idx = st.selectbox("Pick a location", range(len(results)), format_func=lambda i: labels[i])
             sel = results[idx]
             lat, lon = sel["latitude"], sel["longitude"]
-            tz_str = "auto"
         else:
-            st.info("Type a place name to search. Example: 'Ordu' or 'Amsterdam'.")
-            lat, lon, tz_str = None, None, "auto"
+            lat, lon = None, None
+
+    elif mode == "Latitude/Longitude":
+        lat = st.number_input("Latitude", value=st.session_state["picked_latlon"][0], format="%.6f")
+        lon = st.number_input("Longitude", value=st.session_state["picked_latlon"][1], format="%.6f")
+
     else:
-        lat = st.number_input("Latitude", value=40.916, format="%.6f")
-        lon = st.number_input("Longitude", value=38.387, format="%.6f")
-        tz_str = "auto"
+        # Map mode will set lat/lon later from session state
+        lat, lon = None, None
 
     st.header("Historical Range")
     today = date.today()
@@ -180,8 +189,37 @@ with st.sidebar:
 
     fetch = st.button("Fetch Data", type="primary")
 
+# --------- Map Picker (main area) ---------
+if mode == "Pick on Map":
+    st.subheader("Map Picker")
+    try:
+        from streamlit_folium import st_folium
+        import folium
+        center = st.session_state.get("picked_latlon", [40.916, 38.387])
+        m = folium.Map(location=center, zoom_start=9, tiles="OpenStreetMap")
+        # Show current marker if present
+        if st.session_state.get("picked_latlon"):
+            folium.Marker(st.session_state["picked_latlon"], tooltip="Selected").add_to(m)
+        out = st_folium(m, height=420, use_container_width=True)
+        if out and out.get("last_clicked"):
+            lat_clicked = out["last_clicked"]["lat"]
+            lon_clicked = out["last_clicked"]["lng"]
+            st.session_state["picked_latlon"] = [lat_clicked, lon_clicked]
+            st.success(f"Selected: {lat_clicked:.4f}, {lon_clicked:.4f}")
+    except Exception as e:
+        st.error("Map component not available. Install streamlit-folium and folium.")
+        st.code("pip install streamlit-folium folium")
+
 # --------- Fetch & Process ---------
 if fetch:
+    # Resolve lat/lon depending on mode
+    if mode == "Pick on Map":
+        picked = st.session_state.get("picked_latlon")
+        if not picked:
+            st.warning("Click on the map to select a location.")
+            st.stop()
+        lat, lon = picked
+
     if lat is None or lon is None:
         st.warning("Please select or enter a valid location.")
         st.stop()
@@ -352,4 +390,4 @@ if fetch:
                     st.line_chart(f_hourly[["dew_point_2m"]], height=220)
 
 st.markdown("---")
-st.caption("Data source: Open-Meteo (Archive & Forecast APIs). Sunny days = weathercode 0 (and 1 if enabled). Charts are separated per metric; daily temperature shown as min/max.")
+st.caption("Data source: Open-Meteo (Archive & Forecast APIs). Sunny days = weathercode 0 (and 1 if enabled). Charts are separated per metric; daily temperature shown as min/max. Includes a map picker using folium (click to set lat/lon).")
