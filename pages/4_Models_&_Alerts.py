@@ -185,9 +185,9 @@ with tabs[1]:
             st.info("No forecast daily data available.")
         else:
             st.dataframe(ddf_fc)
-            next7_precip = ddf_fc["precip_sum_api"].sum() if "precip_sum_api" in ddf_fc.columns else float("nan")
-            st.write(f"**5‑day precip total:** {next7_precip:.1f} mm")
-            if next7_precip < weekly_precip_threshold:
+            next5_precip = ddf_fc["precip_sum_api"].sum() if "precip_sum_api" in ddf_fc.columns else float("nan")
+            st.write(f"**5‑day precip total:** {next5_precip:.1f} mm")
+            if next5_precip < weekly_precip_threshold:
                 st.warning("Forecasted 5‑day precipitation is below your weekly threshold — watch irrigation.")
             hot_days_fc = int((ddf_fc.get("t_max_api", pd.Series()) >= float(heat_temp_thresh)).sum())
             st.write(f"**5‑day heat days (≥{heat_temp_thresh:.1f}°C):** {hot_days_fc}")
