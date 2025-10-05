@@ -7,4 +7,3 @@ streamlit-folium>=0.21.0
 folium>=0.17.0
 earthengine-api>=0.1.395
 geemap>=0.33.0
-
