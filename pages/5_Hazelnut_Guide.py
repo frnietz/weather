@@ -61,8 +61,15 @@ with st.sidebar:
     st.header("Reference period")
     today = date.today()
     start_date = st.date_input("Start", value=today - timedelta(days=365))
-    end_date = st.date_input("End", value=today, min_value=start_date)
-    fetch = st.button("Build monthly guide", type="primary")
+    end_date = st.date_input("End", value=today, min_value=start_date, max_value=today)
+    if end_date > today:
+    st.warning("End date trimmed to today (archive has no future data).")
+    end_date = today
+if start_date > end_date:
+    st.warning("Start date was after end date — aligning to end date.")
+    start_date = end_date
+
+fetch = st.button("Build monthly guide", type="primary")
 
 def build_guidance_table():
     rows = [
@@ -91,7 +98,10 @@ if fetch:
             st.stop()
         dailies = []
         for la, lo in pts:
-            hist = fetch_openmeteo_archive(la, lo, start_date.isoformat(), end_date.isoformat(), tz_str)
+            try:
+                hist = fetch_openmeteo_archive(la, lo, start_date.isoformat(), end_date.isoformat(), tz_str)
+            except Exception as e:
+                st.error(f"Archive fetch failed at point ({la:.4f}, {lo:.4f}): {e}"); st.stop()
             hdf = hourly_to_dataframe(hist)
             ddf_api = daily_to_dataframe(hist).rename(columns={
                 "temperature_2m_min":"t_min_api","temperature_2m_max":"t_max_api",
@@ -114,7 +124,10 @@ if fetch:
         if lat is None or lon is None:
             st.warning("Please select a valid point location.")
             st.stop()
+        try:
         hist = fetch_openmeteo_archive(lat, lon, start_date.isoformat(), end_date.isoformat(), tz_str)
+    except Exception as e:
+        st.error(f"Archive fetch failed: {e}. Check that end date is not in the future and lat/lon are valid."); st.stop()
         hdf = hourly_to_dataframe(hist)
         ddf_api = daily_to_dataframe(hist).rename(columns={
             "temperature_2m_min":"t_min_api","temperature_2m_max":"t_max_api",
