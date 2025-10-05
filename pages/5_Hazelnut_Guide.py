@@ -1,172 +1,256 @@
-import streamlit as st
-import pandas as pd
 from datetime import date, timedelta
-from lib.data_sources import (
-    geocode_place, fetch_openmeteo_archive, hourly_to_dataframe, daily_to_dataframe,
-    summarize_daily_from_hourly, add_weather_desc, monthly_from_daily, drought_proxy_flags
-)
-from lib.geoutils import parse_polygon_from_output, sample_points_in_polygon
+from typing import List, Dict, Any, Optional
+import requests
+import pandas as pd
+import numpy as np
 
-st.title("🌰 Hazelnut Guide — Monthly Climate & Care")
+WMO_CODES = {
+    0: "Clear sky",
+    1: "Mainly clear",
+    2: "Partly cloudy",
+    3: "Overcast",
+    45: "Fog",
+    48: "Depositing rime fog",
+    51: "Drizzle: Light",
+    53: "Drizzle: Moderate",
+    55: "Drizzle: Dense",
+    56: "Freezing Drizzle: Light",
+    57: "Freezing Drizzle: Dense",
+    61: "Rain: Slight",
+    63: "Rain: Moderate",
+    65: "Rain: Heavy",
+    66: "Freezing Rain: Light",
+    67: "Freezing Rain: Heavy",
+    71: "Snow fall: Slight",
+    73: "Snow fall: Moderate",
+    75: "Snow fall: Heavy",
+    77: "Snow grains",
+    80: "Rain showers: Slight",
+    81: "Rain showers: Moderate",
+    82: "Rain showers: Violent",
+    85: "Snow showers: Slight",
+    86: "Snow showers: Heavy",
+    95: "Thunderstorm: Slight/Moderate",
+    96: "Thunderstorm with hail: Slight",
+    99: "Thunderstorm with hail: Heavy"
+}
 
-with st.sidebar:
-    st.header("Scope")
-    mode = st.radio("Analyze:", ["Point (place/latlon)", "Field (polygon)"])
-    tz_str = "auto"
+def geocode_place(name: str, count: int = 5):
+    url = "https://geocoding-api.open-meteo.com/v1/search"
+    params = {"name": name, "count": count, "language": "en", "format": "json"}
+    r = requests.get(url, params=params, timeout=20)
+    r.raise_for_status()
+    data = r.json()
+    return data.get("results", [])
 
-    if mode == "Point (place/latlon)":
-        pick = st.radio("Pick by:", ["Place name", "Latitude/Longitude"], horizontal=True)
-        if pick == "Place name":
-            q = st.text_input("City/Town/Region name", value="Giresun")
-            results = geocode_place(q) if q else []
-            if results:
-                labels = [f"{r['name']}, {r.get('admin1','')}, {r.get('country','')} ({r['latitude']:.3f}, {r['longitude']:.3f})" for r in results]
-                idx = st.selectbox("Pick a location", range(len(results)), format_func=lambda i: labels[i])
-                sel = results[idx]
-                lat, lon = sel["latitude"], sel["longitude"]
-            else:
-                lat, lon = None, None
-        else:
-            lat = st.number_input("Latitude", value=st.session_state.get("picked_latlon", [40.916, 38.387])[0], format="%.6f")
-            lon = st.number_input("Longitude", value=st.session_state.get("picked_latlon", [40.916, 38.387])[1], format="%.6f")
-    else:
-        lat, lon = None, None
-        st.caption("Draw a polygon on this page or use a saved field in Fields Manager.")
-        try:
-            from streamlit_folium import st_folium
-            import folium
-            from folium.plugins import Draw
-            center = st.session_state.get("picked_latlon", [40.916, 38.387])
-            m = folium.Map(location=center, zoom_start=12, tiles="OpenStreetMap")
-            draw = Draw(export=True, position="topleft",
-                        draw_options={"polyline": False, "rectangle": True, "polygon": True,
-                                      "circle": False, "marker": False, "circlemarker": False},
-                        edit_options={"edit": True, "remove": True})
-            draw.add_to(m)
-            out = st_folium(m, height=420, use_container_width=True)
-            geom = out.get("last_active_drawing", {}).get("geometry") if out else None
-            if not geom and out and out.get("all_drawings"):
-                geom = out["all_drawings"][-1].get("geometry")
-            if geom and geom.get("type") == "Polygon":
-                st.session_state["orchard_geom"] = geom
-                pts = sample_points_in_polygon(geom, max_points=9)
-                st.session_state["sampled_points"] = pts
-                st.success(f"Using {len(pts)} sampling points in polygon.")
-            else:
-                st.info("Draw a polygon to summarize that area.")
-        except Exception as e:
-            st.warning("Map component not available. Install streamlit-folium and folium.")
-            st.code("pip install streamlit-folium folium")
-
-    st.header("Reference period")
-    today = date.today()
-    start_date = st.date_input("Start", value=today - timedelta(days=365))
-    end_date = st.date_input("End", value=today, min_value=start_date)
-    fetch = st.button("Build monthly guide", type="primary")
-
-def build_guidance_table():
-    rows = [
-        ("Jan","Dormant","Drainage, frost protection","Structural pruning; sanitation; soil sampling","Cankers; sanitize mummies"),
-        ("Feb","Dormant / catkin shed","Avoid waterlogging/frost","Finish pruning; plan nutrition","Cankers; dormant sprays if local guidance"),
-        ("Mar","Budbreak","Rains okay; track frost","First N after growth; pre-emergent; sucker control","Aphids/leafrollers; bud mite"),
-        ("Apr","Rapid growth","Watch dry spells","Split N if needed; maintain weed strip","Leafrollers; place traps"),
-        ("May","Nut set","Irrigation may begin","Finish N by late spring; foliar only if deficient","Aphids; bud mite (region)"),
-        ("Jun","Kernel growth","Irrigation important","Mow floor; maintain cover","Filbertworm monitoring; stink bugs"),
-        ("Jul","Kernel fill","Irrigation critical","Avoid late heavy N; K by tests","Filbertworm timing; BMSB scouting"),
-        ("Aug","Maturity approaching","Avoid water stress","Leaf sampling for nutrition; prep floor","Continue pest monitoring"),
-        ("Sep","Harvest begins","Keep floor dry","Mow/sweep; timely harvest","Wasps; vertebrates"),
-        ("Oct","Harvest / post","Wetter; avoid rutting","Finish harvest; remove mummies; soil tests","Sanitation for next season"),
-        ("Nov","Leaf fall","High rainfall","Lime/P/K by tests; cover crop","Canker scouting after leaf drop"),
-        ("Dec","Dormant","Storm season","Plan pruning; service sprayers","Rodent guards; sanitation"),
+def fetch_openmeteo_archive(lat: float, lon: float, start: str, end: str, tz_str: str = "auto") -> Dict[str, Any]:
+    url = "https://archive-api.open-meteo.com/v1/archive"
+    hourly_vars = [
+        "temperature_2m", "relative_humidity_2m", "dew_point_2m",
+        "apparent_temperature", "precipitation", "rain", "snowfall", "surface_pressure",
+        "wind_speed_10m", "wind_gusts_10m", "wind_direction_10m"
     ]
-    return pd.DataFrame(rows, columns=["Month","Phenology","Climate Focus","Orchard Ops","Pest/Disease Focus"])
+    daily_vars = [
+        "temperature_2m_max", "temperature_2m_min", "precipitation_sum",
+        "wind_speed_10m_max", "weathercode"
+    ]
+    params = {
+        "latitude": lat, "longitude": lon,
+        "start_date": start, "end_date": end,
+        "hourly": ",".join(hourly_vars),
+        "daily": ",".join(daily_vars),
+        "timezone": tz_str
+    }
+    r = requests.get(url, params=params, timeout=30)
+    r.raise_for_status()
+    return r.json()
 
-if fetch:
-    st.subheader("1) Climate summary from your period")
-    if mode == "Field (polygon)":
-        geom = st.session_state.get("orchard_geom")
-        pts = st.session_state.get("sampled_points", [])
-        if not geom or not pts:
-            st.warning("Please draw a field polygon first.")
-            st.stop()
-        dailies = []
-        for la, lo in pts:
-            hist = fetch_openmeteo_archive(la, lo, start_date.isoformat(), end_date.isoformat(), tz_str)
-            hdf = hourly_to_dataframe(hist)
-            ddf_api = daily_to_dataframe(hist).rename(columns={
-                "temperature_2m_min":"t_min_api","temperature_2m_max":"t_max_api",
-                "precipitation_sum":"precip_sum_api","wind_speed_10m_max":"wind_max_api",
-            })
-            ddf = ddf_api.join(summarize_daily_from_hourly(hdf), how="outer").sort_index()
-            ddf = add_weather_desc(ddf)
-            if "weathercode" in ddf.columns:
-                ddf["sunny"] = ddf["weathercode"].isin([0,1])
-            dailies.append(ddf)
-        if dailies:
-            import numpy as np
-            all_idx = sorted(set().union(*[d.index for d in dailies]))
-            aligned = [d.reindex(all_idx) for d in dailies]
-            stacked = pd.concat(aligned, axis=1, keys=range(len(aligned)))
-            daily = stacked.groupby(level=1, axis=1).mean(numeric_only=True)
+def fetch_openmeteo_forecast(lat: float, lon: float, days: int = 5, tz_str: str = "auto") -> Dict[str, Any]:
+    url = "https://api.open-meteo.com/v1/forecast"
+    hourly_vars = [
+        "temperature_2m", "relative_humidity_2m", "dew_point_2m",
+        "apparent_temperature", "precipitation", "surface_pressure",
+        "wind_speed_10m", "wind_gusts_10m", "wind_direction_10m"
+    ]
+    daily_vars = [
+        "temperature_2m_max", "temperature_2m_min", "precipitation_sum",
+        "wind_speed_10m_max", "weathercode"
+    ]
+    params = {
+        "latitude": lat, "longitude": lon,
+        "hourly": ",".join(hourly_vars),
+        "daily": ",".join(daily_vars),
+        "forecast_days": days,
+        "timezone": tz_str
+    }
+    r = requests.get(url, params=params, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+def hourly_to_dataframe(payload: dict) -> pd.DataFrame:
+    if "hourly" not in payload: 
+        return pd.DataFrame()
+    hourly = payload["hourly"]
+    times = pd.to_datetime(hourly.get("time", []))
+    df = pd.DataFrame({"time": times})
+    for k, v in hourly.items():
+        if k == "time": 
+            continue
+        df[k] = v
+    return df.set_index("time")
+
+def daily_to_dataframe(payload: dict) -> pd.DataFrame:
+    if "daily" not in payload: 
+        return pd.DataFrame()
+    daily = payload["daily"]
+    times = pd.to_datetime(daily.get("time", []))
+    df = pd.DataFrame({"date": times.date})
+    for k, v in daily.items():
+        if k == "time":
+            continue
+        df[k] = v
+    df = df.set_index(pd.to_datetime(df["date"])).drop(columns=["date"])
+    return df
+
+def summarize_daily_from_hourly(h: pd.DataFrame) -> pd.DataFrame:
+    if h.empty:
+        return pd.DataFrame()
+    g = h.groupby(h.index.date)
+    daily = pd.DataFrame({
+        "t_mean": g["temperature_2m"].mean(),
+        "t_min_hourly": g["temperature_2m"].min(),
+        "t_max_hourly": g["temperature_2m"].max(),
+        "rh_mean": g["relative_humidity_2m"].mean(),
+        "dewpoint_mean": g["dew_point_2m"].mean(),
+        "precip_sum_hourly": g["precipitation"].sum(),
+        "wind_max_hourly": g["wind_speed_10m"].max()
+    })
+    daily.index = pd.to_datetime(daily.index)
+    return daily
+
+def add_weather_desc(df: pd.DataFrame) -> pd.DataFrame:
+    if "weathercode" in df.columns:
+        df = df.copy()
+        df["weather_desc"] = df["weathercode"].map(WMO_CODES).fillna("Unknown")
+    return df
+
+def aggregate_daily_across_points(dfs: List[pd.DataFrame]) -> pd.DataFrame:
+    if not dfs:
+        return pd.DataFrame()
+    aligned = [df.copy() for df in dfs]
+    all_index = sorted(set().union(*[d.index for d in aligned]))
+    aligned = [d.reindex(all_index) for d in aligned]
+    stacked = pd.concat(aligned, axis=1, keys=range(len(aligned)))
+    numeric_cols = [c for c in aligned[0].columns if c != "weathercode"]
+    num = stacked.loc[:, stacked.columns.get_level_values(1).isin(numeric_cols)]
+    agg_num = num.groupby(level=1, axis=1).mean(numeric_only=True)
+    if "weathercode" in aligned[0].columns:
+        wc = stacked.xs("weathercode", axis=1, level=1)
+        wc_mode = wc.mode(axis=1)
+        agg = agg_num.copy()
+        if not wc_mode.empty:
+            agg["weathercode"] = wc_mode.iloc[:,0]
         else:
-            daily = pd.DataFrame()
+            agg["weathercode"] = np.nan
     else:
-        if lat is None or lon is None:
-            st.warning("Please select a valid point location.")
-            st.stop()
-        hist = fetch_openmeteo_archive(lat, lon, start_date.isoformat(), end_date.isoformat(), tz_str)
-        hdf = hourly_to_dataframe(hist)
-        ddf_api = daily_to_dataframe(hist).rename(columns={
-            "temperature_2m_min":"t_min_api","temperature_2m_max":"t_max_api",
-            "precipitation_sum":"precip_sum_api","wind_speed_10m_max":"wind_max_api",
-        })
-        daily = ddf_api.join(summarize_daily_from_hourly(hdf), how="outer").sort_index()
-        daily = add_weather_desc(daily)
-        if "weathercode" in daily.columns:
-            daily["sunny"] = daily["weathercode"].isin([0,1])
+        agg = agg_num
+    return agg
 
-    if daily.empty:
-        st.warning("No daily data returned for the reference period.")
-        st.stop()
+def aggregate_hourly_across_points(dfs: List[pd.DataFrame]) -> pd.DataFrame:
+    if not dfs:
+        return pd.DataFrame()
+    aligned = [df.copy() for df in dfs]
+    all_index = sorted(set().union(*[d.index for d in aligned]))
+    aligned = [d.reindex(all_index) for d in aligned]
+    stacked = pd.concat(aligned, axis=1, keys=range(len(aligned)))
+    agg = stacked.groupby(level=1, axis=1).mean(numeric_only=True)
+    return agg
 
-    monthly = monthly_from_daily(daily)
-    st.dataframe(monthly)
+def compute_gdd(daily_df: pd.DataFrame, base_c: float = 10.0, cap_c: Optional[float] = None) -> pd.Series:
+    tmin = daily_df.get("t_min_api", daily_df.get("temperature_2m_min"))
+    tmax = daily_df.get("t_max_api", daily_df.get("temperature_2m_max"))
+    if tmin is None or tmax is None:
+        return pd.Series(dtype=float)
+    tmin = tmin.copy(); tmax = tmax.copy()
+    if cap_c is not None:
+        tmax = tmax.clip(upper=cap_c)
+    tmean = (tmin + tmax) / 2.0
+    gdd = (tmean - base_c).clip(lower=0.0)
+    gdd.name = "GDD"
+    return gdd
 
-    if "precip_total" in monthly.columns:
-        st.markdown("**Monthly precipitation (mm)**")
-        st.bar_chart(monthly[["precip_total"]])
-    if "tmin_mean" in monthly.columns and "tmax_mean" in monthly.columns:
-        st.markdown("**Monthly temperature (mean daily min/max, °C)**")
-        st.line_chart(monthly[["tmin_mean","tmax_mean"]])
-    if "rh_mean" in monthly.columns:
-        st.markdown("**Monthly mean RH (%)**")
-        st.line_chart(monthly[["rh_mean"]])
-    if "sunny_days" in monthly.columns:
-        st.markdown("**Sunny days per month**")
-        st.bar_chart(monthly[["sunny_days"]])
-    if "heat_days_35C" in monthly.columns:
-        st.markdown("**Monthly heat-stress days (≥35°C)**")
-        st.bar_chart(monthly[["heat_days_35C"]])
+# ---------- Monthly aggregation helpers ----------
+def monthly_from_daily(daily_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build monthly summaries from a per-day dataframe that may include:
+    t_min_api, t_max_api, rh_mean, dewpoint_mean, precip_sum_api, wind_max_api, weathercode, sunny(bool).
+    Returns a dataframe indexed by Month (YYYY-MM) with metrics like:
+    tmin_mean, tmax_mean, precip_total, rainy_days, dry_days, sunny_days, heat_days_32C, frost_days_0C.
+    """
+    if daily_df is None or daily_df.empty:
+        return pd.DataFrame()
+    df = daily_df.copy()
+    df.index = pd.to_datetime(df.index)
+    df["month"] = df.index.to_period("M").astype(str)
 
-    dr = drought_proxy_flags(monthly)
-    if not dr.empty and dr.any():
-        months_flagged = list(monthly.index[dr])
-        st.warning(f"Drought-like months (heuristic): {', '.join(months_flagged)} — consider irrigation/soil moisture checks.")
+    # Basic series (handle missing columns gracefully)
+    tmin = df.get("t_min_api", df.get("temperature_2m_min"))
+    tmax = df.get("t_max_api", df.get("temperature_2m_max"))
+    rh   = df.get("rh_mean")
+    dpt  = df.get("dewpoint_mean")
+    pr   = df.get("precip_sum_api", df.get("precipitation_sum", pd.Series(index=df.index, dtype=float)))
+    wc   = df.get("weathercode")
+    sunny = df.get("sunny")
+    if sunny is None and wc is not None:
+        sunny = wc.isin([0,1])
 
-    st.subheader("2) Best-practice tasks by month (guide)")
-    guide = build_guidance_table()
-    st.dataframe(guide)
+    agg = pd.DataFrame(index=sorted(df["month"].unique()))
+    if tmin is not None: agg["tmin_mean"] = df.groupby("month")[tmin.name].mean()
+    if tmax is not None: agg["tmax_mean"] = df.groupby("month")[tmax.name].mean()
+    if rh is not None:   agg["rh_mean"]   = df.groupby("month")[rh.name].mean()
+    if dpt is not None:  agg["dew_mean"]  = df.groupby("month")[dpt.name].mean()
+    if pr is not None:
+        agg["precip_total"] = df.groupby("month")[pr.name].sum()
+        agg["rainy_days"]   = df.groupby("month")[(pr > 1.0)].sum()
+        agg["dry_days"]     = df.groupby("month")[(pr < 1.0)].sum()
+    if sunny is not None:
+        agg["sunny_days"] = df.groupby("month")[sunny.name].sum()
+    if tmax is not None:
+        agg["heat_days_32C"] = df.groupby("month")[(tmax >= 32.0)].sum()
+        agg["heat_days_35C"] = df.groupby("month")[(tmax >= 35.0)].sum()
+    if tmin is not None:
+        agg["frost_days_0C"] = df.groupby("month")[(tmin <= 0.0)].sum()
+        agg["frost_days_-2C"] = df.groupby("month")[(tmin <= -2.0)].sum()
+    return agg
 
-    with st.expander("Actionable notes (short)"):
-        for _, r in guide.iterrows():
-            st.markdown(f"**{r['Month']} — {r['Phenology']}**  \n"
-                        f"- Climate: {r['Climate Focus']}  \n"
-                        f"- Ops: {r['Orchard Ops']}  \n"
-                        f"- IPM: {r['Pest/Disease Focus']}")
+def drought_proxy_flags(monthly_df: pd.DataFrame) -> pd.Series:
+    """
+    A very simple drought proxy flag per month using precip_total and dry_days.
+    Flags True if precip_total < 30 mm AND dry_days > 20 (tune for local climate).
+    """
+    if monthly_df is None or monthly_df.empty:
+        return pd.Series(dtype=bool)
+    pt = monthly_df.get("precip_total", pd.Series([0]*len(monthly_df), index=monthly_df.index))
+    dd = monthly_df.get("dry_days", pd.Series([0]*len(monthly_df), index=monthly_df.index))
+    return (pt < 30.0) & (dd > 20)
 
-    st.download_button("Download monthly climate CSV", monthly.to_csv().encode("utf-8"),
-                       "monthly_climate_summary.csv", "text/csv")
-    st.download_button("Download guide CSV", guide.to_csv(index=False).encode("utf-8"),
-                       "hazelnut_monthly_guide.csv", "text/csv")
+# ---------- Weekly sums & heat-day helpers for alerts ----------
+def weekly_precip_from_daily(daily_df: pd.DataFrame, week_label: str = "W-MON") -> pd.DataFrame:
+    """Return weekly precipitation sums using pandas resample on the daily precip column(s)."""
+    if daily_df is None or daily_df.empty: return pd.DataFrame()
+    df = daily_df.copy(); df.index = pd.to_datetime(df.index)
+    pr = df.get("precip_sum_api", df.get("precipitation_sum"))
+    if pr is None: return pd.DataFrame()
+    wk = pr.resample(week_label).sum().to_frame("precip_week_sum")
+    wk["week_start"] = wk.index.to_period("W-MON").start_time.date
+    wk["week_end"] = wk.index.to_period("W-MON").end_time.date
+    wk["month"] = wk.index.to_period("M").astype(str)
+    return wk
 
-st.caption("Note: generalized heuristics. Calibrate with local extension guidance, cultivar, and soil/leaf analyses.")
+def count_heat_days_in_month(daily_df: pd.DataFrame, month:int, threshold_c: float = 35.0) -> int:
+    if daily_df is None or daily_df.empty: return 0
+    df = daily_df.copy(); df.index = pd.to_datetime(df.index)
+    tmax = df.get("t_max_api", df.get("temperature_2m_max"))
+    if tmax is None: return 0
+    sel = df[df.index.month == month]
+    return int((sel[tmax.name] >= threshold_c).sum())
