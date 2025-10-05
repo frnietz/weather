@@ -253,4 +253,4 @@ def count_heat_days_in_month(daily_df: pd.DataFrame, month:int, threshold_c: flo
     tmax = df.get("t_max_api", df.get("temperature_2m_max"))
     if tmax is None: return 0
     sel = df[df.index.month == month]
-    return int((sel[tmax.name] >= threshold_c).sum())
+    return int((sel[tmax.name] >= threshold_c).sum()) 
