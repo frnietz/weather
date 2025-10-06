@@ -68,7 +68,8 @@ if mode in ["Pick on Map", "Draw Area (Polygon)"]:
                 folium.Marker(st.session_state["picked_latlon"], tooltip="Selected").add_to(m)
             out = st_folium(m, height=420, use_container_width=True)
             if out and out.get("last_clicked"):
-                lat_clicked = out["last_clicked"]["lat"]; lon_clicked = out["last_clicked"]["lng"]
+                lat_clicked = out["last_clicked"]["lat"]
+                lon_clicked = out["last_clicked"]["lng"]
                 st.session_state["picked_latlon"] = [lat_clicked, lon_clicked]
                 st.success(f"Selected: {lat_clicked:.4f}, {lon_clicked:.4f}")
         else:
@@ -105,7 +106,8 @@ if fetch:
     if mode == "Draw Area (Polygon)":
         geom = st.session_state.get("orchard_geom")
         if not geom:
-            st.warning("Please draw a polygon area first."); st.stop()
+            st.warning("Please draw a polygon area first.")
+            st.stop()
         sample_pts = st.session_state.get("sampled_points") or sample_points_in_polygon(geom, max_points=max_points)
         st.write(f"Sampling **{len(sample_pts)}** points inside area for aggregation.")
         daily_list, hourly_list = [], []
@@ -114,7 +116,8 @@ if fetch:
                 try:
                     hist = fetch_openmeteo_archive(la, lo, start_date.isoformat(), end_date.isoformat(), tz_str)
                 except Exception as e:
-                    st.error(f"Archive fetch failed at ({la:.4f},{lo:.4f}): {e}"); st.stop()
+                    st.error(f"Archive fetch failed at ({la:.4f},{lo:.4f}): {e}")
+                    st.stop()
                 h = hourly_to_dataframe(hist)
                 d_api = daily_to_dataframe(hist).rename(columns={
                     "temperature_2m_min": "t_min_api",
@@ -188,7 +191,8 @@ if fetch:
         if mode == "Pick on Map":
             lat, lon = st.session_state.get("picked_latlon", [None, None])
         if lat is None or lon is None:
-            st.warning("Please select or enter a valid location."); st.stop()
+            st.warning("Please select or enter a valid location.")
+            st.stop()
 
         c1, c2 = st.columns([1.4, 0.6], vertical_alignment="top")
         with c1:
@@ -197,7 +201,8 @@ if fetch:
                 try:
                     hist = fetch_openmeteo_archive(lat, lon, start_date.isoformat(), end_date.isoformat(), tz_str)
                 except Exception as e:
-                    st.error(f"Archive fetch failed: {e}"); st.stop()
+                    st.error(f"Archive fetch failed: {e}")
+                    st.stop()
             hdf = hourly_to_dataframe(hist)
             ddf_daily_api = daily_to_dataframe(hist)
             ddf_from_hourly = summarize_daily_from_hourly(hdf)
