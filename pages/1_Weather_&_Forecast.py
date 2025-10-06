@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 
 from lib.data_sources import (
-    geocode_place, fetch_openmeteo_archive,
+    geocode_place, fetch_openmeteo_archive, fetch_openmeteo_forecast,
     hourly_to_dataframe, daily_to_dataframe, summarize_daily_from_hourly,
     add_weather_desc, aggregate_daily_across_points, aggregate_hourly_across_points
 )
@@ -39,6 +39,9 @@ with st.sidebar:
     default_start = today - timedelta(days=30)
     start_date = st.date_input("Start date", value=default_start, max_value=today - timedelta(days=1))
     end_date = st.date_input("End date", value=today - timedelta(days=1), min_value=start_date, max_value=today)
+
+    st.header("Forecast")
+    forecast_on = st.toggle("Show 5-Day Forecast", value=True)
 
     st.header("Sunny Days")
     include_mainly_clear = st.toggle("Count 'Mainly clear' as sunny", value=True)
@@ -99,6 +102,7 @@ if mode in ["Pick on Map", "Draw Area (Polygon)"]:
         st.code("pip install streamlit-folium folium")
 
 if fetch:
+    from lib.data_sources import add_weather_desc  # ensure import
     if mode == "Draw Area (Polygon)":
         geom = st.session_state.get("orchard_geom")
         if not geom:
@@ -120,12 +124,11 @@ if fetch:
                 d_from_h = summarize_daily_from_hourly(h)
                 d = d_api.join(d_from_h, how="outer").sort_index()
                 daily_list.append(d); hourly_list.append(h)
-        from lib.data_sources import aggregate_daily_across_points, aggregate_hourly_across_points
         ddf = aggregate_daily_across_points(daily_list)
         hdf_mean = aggregate_hourly_across_points(hourly_list)
 
         if "weathercode" in ddf.columns:
-            sunny_codes = [0, 1]  # can be toggled elsewhere if needed
+            sunny_codes = [0, 1] if include_mainly_clear else [0]
             ddf["sunny"] = ddf["weathercode"].isin(sunny_codes)
         ddf = add_weather_desc(ddf)
 
@@ -177,7 +180,8 @@ if fetch:
                 })
                 ddf = add_weather_desc(ddf)
                 if "weathercode" in ddf.columns:
-                    ddf["sunny"] = ddf["weathercode"].isin([0,1])
+                    sunny_codes = [0, 1] if include_mainly_clear else [0]
+                    ddf["sunny"] = ddf["weathercode"].isin(sunny_codes)
                 st.caption("Daily summary (API + computed means)")
                 st.dataframe(ddf)
 
