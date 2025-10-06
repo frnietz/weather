@@ -55,6 +55,7 @@ with st.sidebar:
 
     fetch = st.button("Fetch Data", type="primary")
 
+# Map sections
 if mode in ["Pick on Map", "Draw Area (Polygon)"]:
     try:
         from streamlit_folium import st_folium
@@ -101,8 +102,8 @@ if mode in ["Pick on Map", "Draw Area (Polygon)"]:
         st.error("Map component not available. Install streamlit-folium and folium.")
         st.code("pip install streamlit-folium folium")
 
+# Fetch & display
 if fetch:
-    from lib.data_sources import add_weather_desc  # ensure import
     if mode == "Draw Area (Polygon)":
         geom = st.session_state.get("orchard_geom")
         if not geom:
