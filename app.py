@@ -1,8 +1,9 @@
 import streamlit as st
 
 st.set_page_config(page_title="Letta Agritech", page_icon="🌤️", layout="wide")
+
 st.title("Letta Agritech Platform")
-st.write("Use the sidebar pages to explore weather, fields, satellite analytics, models, alerts, and the hazelnut guide.")
+st.write("Explore weather, fields, satellite analytics, models & alerts, and the hazelnut guide.")
 
 try:
     st.page_link("pages/1_Weather_&_Forecast.py", label="Weather & Forecast", icon="🌦️")
